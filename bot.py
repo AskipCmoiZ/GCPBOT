@@ -1,7 +1,7 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
-import sqlite3
+import psycopg2
 import os
 from datetime import datetime
 
@@ -24,51 +24,37 @@ LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "1546764469143863377"))
 # BASE DE DONNÉES
 # ==========================================
 
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+def get_db_connection():
+    if not DATABASE_URL:
+        raise RuntimeError("❌ La variable DATABASE_URL n'est pas configurée sur Railway.")
+    return psycopg2.connect(DATABASE_URL)
+
 def init_db():
-    conn = sqlite3.connect("gcp.db")
-    c = conn.cursor()
-
-    c.execute('''CREATE TABLE IF NOT EXISTS membres (
-        discord_id TEXT PRIMARY KEY,
-        nom TEXT,
-        grade TEXT DEFAULT 'Soldat',
-        specialite TEXT DEFAULT 'Assaulteur',
-        date_entree TEXT,
-        opex_count INTEGER DEFAULT 0,
-        note_total REAL DEFAULT 0,
-        note_count INTEGER DEFAULT 0,
-        distinctions TEXT DEFAULT ''
-    )''')
-
-    c.execute('''CREATE TABLE IF NOT EXISTS opex (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        discord_id TEXT,
-        nom_opex TEXT,
-        note REAL,
-        commentaire TEXT,
-        date TEXT,
-        noter_par TEXT
-    )''')
-
-    conn.commit()
-    conn.close()
+    conn=get_db_connection(); c=conn.cursor()
+    c.execute("""CREATE TABLE IF NOT EXISTS membres (
+        discord_id TEXT PRIMARY KEY, nom TEXT, grade TEXT DEFAULT 'Soldat',
+        specialite TEXT DEFAULT 'Assaulteur', date_entree TEXT,
+        opex_count INTEGER DEFAULT 0, note_total DOUBLE PRECISION DEFAULT 0,
+        note_count INTEGER DEFAULT 0, distinctions TEXT DEFAULT ''
+    )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS opex (
+        id SERIAL PRIMARY KEY, discord_id TEXT, nom_opex TEXT,
+        note DOUBLE PRECISION, commentaire TEXT, date TEXT, noter_par TEXT
+    )""")
+    conn.commit(); conn.close()
 
 def get_membre(discord_id):
-    conn = sqlite3.connect("gcp.db")
-    c = conn.cursor()
-    c.execute("SELECT * FROM membres WHERE discord_id = ?", (str(discord_id),))
-    row = c.fetchone()
-    conn.close()
-    return row
+    conn=get_db_connection(); c=conn.cursor()
+    c.execute("SELECT * FROM membres WHERE discord_id = %s", (str(discord_id),))
+    row=c.fetchone(); conn.close(); return row
 
 def create_membre(discord_id, nom):
-    conn = sqlite3.connect("gcp.db")
-    c = conn.cursor()
-    date_entree = datetime.now().strftime("%d/%m/%Y")
-    c.execute("INSERT OR IGNORE INTO membres (discord_id, nom, date_entree) VALUES (?, ?, ?)",
-              (str(discord_id), nom, date_entree))
-    conn.commit()
-    conn.close()
+    conn=get_db_connection(); c=conn.cursor()
+    date_entree=datetime.now().strftime("%d/%m/%Y")
+    c.execute("INSERT INTO membres (discord_id, nom, date_entree) VALUES (%s, %s, %s) ON CONFLICT (discord_id) DO NOTHING", (str(discord_id), nom, date_entree))
+    conn.commit(); conn.close()
 
 def is_admin(interaction: discord.Interaction) -> bool:
     if WHITELIST_ROLES:
@@ -179,25 +165,25 @@ async def modifier(interaction: discord.Interaction, membre: discord.Member,
         await interaction.response.send_message("❌ Ce membre n'est pas enregistré.", ephemeral=True)
         return
 
-    conn = sqlite3.connect("gcp.db")
+    conn = get_db_connection()
     c = conn.cursor()
 
     changements = []
 
     if grade:
-        c.execute("UPDATE membres SET grade = ? WHERE discord_id = ?", (grade, str(membre.id)))
+        c.execute("UPDATE membres SET grade = %s WHERE discord_id = %s", (grade, str(membre.id)))
         changements.append(f"Grade → **{grade}**")
     if specialite:
-        c.execute("UPDATE membres SET specialite = ? WHERE discord_id = ?", (specialite, str(membre.id)))
+        c.execute("UPDATE membres SET specialite = %s WHERE discord_id = %s", (specialite, str(membre.id)))
         changements.append(f"Spécialité → **{specialite}**")
     if distinctions:
-        c.execute("UPDATE membres SET distinctions = ? WHERE discord_id = ?", (distinctions, str(membre.id)))
+        c.execute("UPDATE membres SET distinctions = %s WHERE discord_id = %s", (distinctions, str(membre.id)))
         changements.append(f"Distinctions → **{distinctions}**")
     if date_entree:
-        c.execute("UPDATE membres SET date_entree = ? WHERE discord_id = ?", (date_entree, str(membre.id)))
+        c.execute("UPDATE membres SET date_entree = %s WHERE discord_id = %s", (date_entree, str(membre.id)))
         changements.append(f"Date d'entrée → **{date_entree}**")
     if opex_count is not None:
-        c.execute("UPDATE membres SET opex_count = ? WHERE discord_id = ?", (opex_count, str(membre.id)))
+        c.execute("UPDATE membres SET opex_count = %s WHERE discord_id = %s", (opex_count, str(membre.id)))
         changements.append(f"Opex effectuées → **{opex_count}**")
 
     conn.commit()
@@ -226,9 +212,9 @@ async def ajouter_distinction(interaction: discord.Interaction, membre: discord.
     else:
         nouvelles = distinction
 
-    conn = sqlite3.connect("gcp.db")
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("UPDATE membres SET distinctions = ? WHERE discord_id = ?", (nouvelles, str(membre.id)))
+    c.execute("UPDATE membres SET distinctions = %s WHERE discord_id = %s", (nouvelles, str(membre.id)))
     conn.commit()
     conn.close()
 
@@ -258,14 +244,14 @@ async def noter(interaction: discord.Interaction, membre: discord.Member,
         await interaction.response.send_message("❌ Ce membre n'est pas enregistré.", ephemeral=True)
         return
 
-    conn = sqlite3.connect("gcp.db")
+    conn = get_db_connection()
     c = conn.cursor()
     date = datetime.now().strftime("%d/%m/%Y")
 
-    c.execute("INSERT INTO opex (discord_id, nom_opex, note, commentaire, date, noter_par) VALUES (?, ?, ?, ?, ?, ?)",
+    c.execute("INSERT INTO opex (discord_id, nom_opex, note, commentaire, date, noter_par) VALUES (%s, %s, %s, %s, %s, %s)",
               (str(membre.id), opex, note, commentaire, date, str(interaction.user.display_name)))
 
-    c.execute("UPDATE membres SET opex_count = opex_count + 1, note_total = note_total + ?, note_count = note_count + 1 WHERE discord_id = ?",
+    c.execute("UPDATE membres SET opex_count = opex_count + 1, note_total = note_total + %s, note_count = note_count + 1 WHERE discord_id = %s",
               (note, str(membre.id)))
 
     conn.commit()
@@ -290,10 +276,10 @@ async def supprimer_note(interaction: discord.Interaction, membre: discord.Membe
         await interaction.response.send_message("❌ Tu n'as pas la permission de faire ça.", ephemeral=True)
         return
 
-    conn = sqlite3.connect("gcp.db")
+    conn = get_db_connection()
     c = conn.cursor()
 
-    c.execute("SELECT id, note FROM opex WHERE discord_id = ? ORDER BY id DESC LIMIT 1", (str(membre.id),))
+    c.execute("SELECT id, note FROM opex WHERE discord_id = %s ORDER BY id DESC LIMIT 1", (str(membre.id),))
     row = c.fetchone()
 
     if not row:
@@ -302,8 +288,8 @@ async def supprimer_note(interaction: discord.Interaction, membre: discord.Membe
         return
 
     opex_id, note = row
-    c.execute("DELETE FROM opex WHERE id = ?", (opex_id,))
-    c.execute("UPDATE membres SET opex_count = opex_count - 1, note_total = note_total - ?, note_count = note_count - 1 WHERE discord_id = ?",
+    c.execute("DELETE FROM opex WHERE id = %s", (opex_id,))
+    c.execute("UPDATE membres SET opex_count = opex_count - 1, note_total = note_total - %s, note_count = note_count - 1 WHERE discord_id = %s",
               (note, str(membre.id)))
 
     conn.commit()
@@ -324,9 +310,9 @@ async def historique(interaction: discord.Interaction, membre: discord.Member = 
         await interaction.response.send_message("❌ Ce membre n'est pas enregistré.", ephemeral=True)
         return
 
-    conn = sqlite3.connect("gcp.db")
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("SELECT nom_opex, note, commentaire, date, noter_par FROM opex WHERE discord_id = ? ORDER BY id DESC LIMIT 10",
+    c.execute("SELECT nom_opex, note, commentaire, date, noter_par FROM opex WHERE discord_id = %s ORDER BY id DESC LIMIT 10",
               (str(membre.id),))
     rows = c.fetchall()
     conn.close()
@@ -351,7 +337,7 @@ async def historique(interaction: discord.Interaction, membre: discord.Member = 
 # /classement
 @tree.command(name="classement", description="Affiche le classement des membres par note moyenne")
 async def classement(interaction: discord.Interaction):
-    conn = sqlite3.connect("gcp.db")
+    conn = get_db_connection()
     c = conn.cursor()
     c.execute("""
         SELECT nom, grade, opex_count,
@@ -385,7 +371,7 @@ async def classement(interaction: discord.Interaction):
 # /stats
 @tree.command(name="stats", description="Statistiques globales de l'unité GCP")
 async def stats(interaction: discord.Interaction):
-    conn = sqlite3.connect("gcp.db")
+    conn = get_db_connection()
     c = conn.cursor()
 
     c.execute("SELECT COUNT(*) FROM membres")
