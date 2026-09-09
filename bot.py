@@ -23,7 +23,7 @@ WHITELIST_ROLES = [
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "1546764469143863377"))
 
 # ID de la catégorie pour les tickets
-TICKET_CATEGORY_ID = int(os.getenv("TICKET_CATEGORY_ID", "0"))
+TICKET_CATEGORY_ID = int(os.getenv("TICKET_CATEGORY_ID", "15342512603104584180"))
 
 # ID du salon pour le message programmé du vendredi après-midi
 SCHEDULED_CHANNEL_ID = int(os.getenv("SCHEDULED_CHANNEL_ID", "0"))
@@ -48,7 +48,7 @@ def init_db():
     
     c.execute("""CREATE TABLE IF NOT EXISTS membres (
         discord_id TEXT PRIMARY KEY, nom TEXT, grade TEXT DEFAULT 'Soldat',
-        specialite TEXT DEFAULT 'Assaulteur', date_entree TEXT,
+        specialite TEXT DEFAULT 'Aucune', date_entree TEXT,
         opex_count INTEGER DEFAULT 0, note_total DOUBLE PRECISION DEFAULT 0,
         note_count INTEGER DEFAULT 0, distinctions TEXT DEFAULT ''
     )""")
