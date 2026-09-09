@@ -144,9 +144,9 @@ tree = bot.tree
 
 # STATUTS ROTATIFS
 status_list = cycle([
-    discord.Game(name="GCP | /aide"),
+    discord.Game(name="/aide"),
     discord.Activity(type=discord.ActivityType.watching, name="Kain FAVEL le meilleur Colonel"),
-    discord.Game(name="Qui ose gagne 🇫🇷")
+    discord.Game(name="Qui ose gagne ⚜️")
 ])
 
 twitch_is_live = False
