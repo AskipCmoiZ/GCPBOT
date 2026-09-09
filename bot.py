@@ -1,5 +1,8 @@
-import os
+import asyncio
 from datetime import datetime
+from itertools import cycle
+import os
+import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
@@ -19,6 +22,9 @@ WHITELIST_ROLES = [
     1521132894104322188, 1521132972731007036
 ]
 
+# ID du rôle automatique attribué aux nouveaux arrivants (0 pour désactiver)
+AUTO_ROLE_ID = int(os.getenv("AUTO_ROLE_ID", "1528963080900317315"))
+
 # ID du salon de logs (0 pour désactiver)
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "1546764469143863377"))
 
@@ -27,6 +33,12 @@ TICKET_CATEGORY_ID = int(os.getenv("TICKET_CATEGORY_ID", "1534251260310458418"))
 
 # ID du salon pour le message programmé du vendredi après-midi
 SCHEDULED_CHANNEL_ID = int(os.getenv("SCHEDULED_CHANNEL_ID", "0"))
+
+# Configuration Twitch
+TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID", "bnuvv5q05hd6g28wh9t2k5edztiws5")
+TWITCH_CLIENT_SECRET = os.getenv("TWITCH_CLIENT_SECRET", "f3og2xaiezsjegbbtvq2bpiy6zc9ot")
+TWITCH_STREAMER_NAME = os.getenv("TWITCH_STREAMER_NAME", "jerushenpuntoo")
+TWITCH_DISCORD_CHANNEL_ID = int(os.getenv("TWITCH_DISCORD_CHANNEL_ID", "1547199636660555796"))
 
 # Fuseau horaire Paris/Europe
 PARIS_TZ = pytz.timezone("Europe/Paris")
@@ -48,7 +60,7 @@ def init_db():
     
     c.execute("""CREATE TABLE IF NOT EXISTS membres (
         discord_id TEXT PRIMARY KEY, nom TEXT, grade TEXT DEFAULT 'Soldat',
-        specialite TEXT DEFAULT 'Aucune', date_entree TEXT,
+        specialite TEXT DEFAULT 'Assaulteur', date_entree TEXT,
         opex_count INTEGER DEFAULT 0, note_total DOUBLE PRECISION DEFAULT 0,
         note_count INTEGER DEFAULT 0, distinctions TEXT DEFAULT ''
     )""")
@@ -100,11 +112,12 @@ def get_absence_active(discord_id):
     conn.close()
     return row
 
-def is_admin(interaction: discord.Interaction) -> bool:
+def is_admin(ctx_or_interaction) -> bool:
+    user = ctx_or_interaction.user if hasattr(ctx_or_interaction, "user") else ctx_or_interaction.author
     if WHITELIST_ROLES:
-        user_role_ids = [r.id for r in interaction.user.roles]
+        user_role_ids = [r.id for r in user.roles]
         return any(role_id in user_role_ids for role_id in WHITELIST_ROLES)
-    return interaction.user.guild_permissions.manage_roles
+    return user.guild_permissions.manage_roles
 
 async def send_log(bot_instance, message: str):
     if LOG_CHANNEL_ID:
@@ -119,7 +132,7 @@ async def send_log(bot_instance, message: str):
             await channel.send(embed=embed)
 
 # ==========================================
-# BOT & TÂCHES AUTOMATIQUES
+# BOT & INITIALISATION
 # ==========================================
 
 intents = discord.Intents.default()
@@ -128,6 +141,34 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
+
+# STATUTS ROTATIFS
+status_list = cycle([
+    discord.Game(name="GCP | /aide"),
+    discord.Activity(type=discord.ActivityType.watching, name="Kain FAVEL le meilleur Colonel"),
+    discord.Game(name="Qui ose gagne 🇫🇷")
+])
+
+twitch_is_live = False
+
+# ==========================================
+# ÉVÉNEMENTS & TÂCHES
+# ==========================================
+
+@bot.event
+async def on_member_join(member: discord.Member):
+    if AUTO_ROLE_ID:
+        role = member.guild.get_role(AUTO_ROLE_ID)
+        if role:
+            try:
+                await member.add_roles(role)
+                await send_log(bot, f"👤 **{member.display_name}** a rejoint le serveur et a reçu le rôle **{role.name}**.")
+            except discord.Forbidden:
+                print(f"❌ Impossible d'attribuer le rôle à {member.display_name} (permissions insuffisantes).")
+
+@tasks.loop(minutes=5)
+async def rotate_status():
+    await bot.change_presence(activity=next(status_list))
 
 @tasks.loop(hours=1)
 async def scheduled_friday_message():
@@ -149,17 +190,112 @@ async def scheduled_friday_message():
                 embed.set_footer(text="GCP — Groupement de Commandos Parachutistes • Qui ose gagne.")
                 await channel.send(embed=embed)
 
+async def get_twitch_access_token(session):
+    if not TWITCH_CLIENT_ID or not TWITCH_CLIENT_SECRET:
+        return None
+    url = f"https://id.twitch.tv/oauth2/token?client_id={TWITCH_CLIENT_ID}&client_secret={TWITCH_CLIENT_SECRET}&grant_type=client_credentials"
+    async with session.post(url) as resp:
+        if resp.status == 200:
+            data = await resp.json()
+            return data.get("access_token")
+    return None
+
+@tasks.loop(minutes=2)
+async def check_twitch_live():
+    global twitch_is_live
+    if not (TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET and TWITCH_STREAMER_NAME and TWITCH_DISCORD_CHANNEL_ID):
+        return
+
+    async with aiohttp.ClientSession() as session:
+        token = await get_twitch_access_token(session)
+        if not token:
+            return
+
+        headers = {
+            "Client-ID": TWITCH_CLIENT_ID,
+            "Authorization": f"Bearer {token}"
+        }
+        url = f"https://api.twitch.tv/helix/streams?user_login={TWITCH_STREAMER_NAME}"
+        
+        try:
+            async with session.get(url, headers=headers) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    streams = data.get("data", [])
+                    if streams:
+                        if not twitch_is_live:
+                            twitch_is_live = True
+                            stream_data = streams[0]
+                            title = stream_data.get("title", "En live !")
+                            game_name = stream_data.get("game_name", "Jeu non spécifié")
+                            
+                            channel = bot.get_channel(TWITCH_DISCORD_CHANNEL_ID)
+                            if channel:
+                                embed = discord.Embed(
+                                    title=f"🔴 {TWITCH_STREAMER_NAME} est en LIVE sur Twitch !",
+                                    url=f"https://twitch.tv/{TWITCH_STREAMER_NAME}",
+                                    description=f"**{title}**\n\n🎮 **Jeu :** {game_name}",
+                                    color=0x9146FF,
+                                    timestamp=datetime.now(PARIS_TZ)
+                                )
+                                embed.set_footer(text="GCP Twitch Alert • Qui ose gagne.")
+                                await channel.send(content=f"📢 **Alerte Live !** Retrouvez le stream ici : https://twitch.tv/{TWITCH_STREAMER_NAME}", embed=embed)
+                    else:
+                        twitch_is_live = False
+        except Exception as e:
+            print(f"Erreur vérification Twitch : {e}")
+
 @bot.event
 async def on_ready():
     init_db()
     if not scheduled_friday_message.is_running():
         scheduled_friday_message.start()
+    if not rotate_status.is_running():
+        rotate_status.start()
+    if not check_twitch_live.is_running():
+        check_twitch_live.start()
     await tree.sync()
     print(f"✅ Bot GCP connecté : {bot.user}")
 
 # ==========================================
-# COMMANDES
+# COMMANDES DU BOT
 # ==========================================
+
+@bot.command()
+async def sync(ctx):
+    if not is_admin(ctx):
+        return
+    bot.tree.copy_global_to(guild=ctx.guild)
+    synced = await bot.tree.sync(guild=ctx.guild)
+    await ctx.send(f"✅ **{len(synced)}** commandes slash synchronisées instantanément sur ce serveur !")
+
+@tree.command(name="en dev", description="en dev")
+@app_commands.describe(membre="Le membre à qui adresser le guide")
+async def guide(interaction: discord.Interaction, membre: discord.Member):
+    embed = discord.Embed(
+        title="en dev",
+        description=(
+            f"en dev"
+            
+        ),
+        color=0x3498DB
+    )
+    embed.set_footer(text="GCP — Groupement de Commandos Parachutistes • Qui ose gagne.")
+    await interaction.response.send_message(content=f"👋 {membre.mention}, voici le guide de l'unité :", embed=embed)
+
+@tree.command(name="en dev", description="en dev")
+@app_commands.describe(membre="Le membre concerné")
+async def reglement(interaction: discord.Interaction, membre: discord.Member):
+    embed = discord.Embed(
+        title="en dev",
+        description=(
+            f"en dev"
+            
+        ),
+        color=0xE74C3C
+    )
+    embed.set_footer(text="GCP — Groupement de Commandos Parachutistes • Qui ose gagne.")
+    await interaction.response.send_message(content=f"📢 {membre.mention}, merci de relire le règlement :", embed=embed)
 
 @tree.command(name="profil", description="Affiche le profil d'un membre du GCP")
 @app_commands.describe(membre="Le membre dont tu veux voir le profil")
@@ -168,23 +304,15 @@ async def profil(interaction: discord.Interaction, membre: discord.Member = None
         membre = interaction.user
 
     row = get_membre(membre.id)
-
     if not row:
-        await interaction.response.send_message(
-            f"❌ {membre.display_name} n'est pas encore enregistré.",
-            ephemeral=True
-        )
+        await interaction.response.send_message(f"❌ {membre.display_name} n'est pas encore enregistré.", ephemeral=True)
         return
 
     discord_id, nom, grade, specialite, date_entree, opex_count, note_total, note_count, distinctions = row
-
     note_moyenne = round(note_total / note_count, 2) if note_count > 0 else "Aucune note"
     distinctions_list = distinctions if distinctions else "Aucune"
 
-    embed = discord.Embed(
-        title=f"🪖 Dossier Opérationnel — {nom}",
-        color=0x2C2F33
-    )
+    embed = discord.Embed(title=f"🪖 Dossier Opérationnel — {nom}", color=0x2C2F33)
     embed.set_thumbnail(url=membre.display_avatar.url)
     
     absence = get_absence_active(membre.id)
@@ -242,7 +370,6 @@ async def modifier(interaction: discord.Interaction, membre: discord.Member,
 
     conn = get_db_connection()
     c = conn.cursor()
-
     changements = []
 
     if grade:
@@ -281,10 +408,7 @@ async def ajouter_distinction(interaction: discord.Interaction, membre: discord.
         return
 
     distinctions_actuelles = row[8]
-    if distinctions_actuelles:
-        nouvelles = distinctions_actuelles + f", {distinction}"
-    else:
-        nouvelles = distinction
+    nouvelles = f"{distinctions_actuelles}, {distinction}" if distinctions_actuelles else distinction
 
     conn = get_db_connection()
     c = conn.cursor()
@@ -313,7 +437,6 @@ async def retirer_distinction(interaction: discord.Interaction, membre: discord.
         return
 
     liste_distinctions = [d.strip() for d in distinctions_actuelles.split(",") if d.strip()]
-    
     trouve = False
     nouvelle_liste = []
     for d in liste_distinctions:
@@ -342,14 +465,8 @@ async def retirer_distinction(interaction: discord.Interaction, membre: discord.
     await send_log(bot, f"🗑️ **{interaction.user.display_name}** a retiré la distinction **{distinction}** à **{membre.display_name}**")
 
 @tree.command(name="noter", description="Noter un membre après une opex")
-@app_commands.describe(
-    membre="Le membre à noter",
-    opex="Nom de l'opération",
-    note="Note de 0 à 10",
-    commentaire="Commentaire optionnel"
-)
-async def noter(interaction: discord.Interaction, membre: discord.Member,
-                opex: str, note: float, commentaire: str = ""):
+@app_commands.describe(membre="Le membre à noter", opex="Nom de l'opération", note="Note de 0 à 10", commentaire="Commentaire optionnel")
+async def noter(interaction: discord.Interaction, membre: discord.Member, opex: str, note: float, commentaire: str = ""):
     if not is_admin(interaction):
         await interaction.response.send_message("❌ Tu n'as pas la permission de faire ça.", ephemeral=True)
         return
@@ -369,7 +486,6 @@ async def noter(interaction: discord.Interaction, membre: discord.Member,
 
     c.execute("INSERT INTO opex (discord_id, nom_opex, note, commentaire, date, noter_par) VALUES (%s, %s, %s, %s, %s, %s)",
               (str(membre.id), opex, note, commentaire, date, str(interaction.user.display_name)))
-
     c.execute("UPDATE membres SET opex_count = opex_count + 1, note_total = note_total + %s, note_count = note_count + 1 WHERE discord_id = %s",
               (note, str(membre.id)))
 
@@ -396,7 +512,6 @@ async def supprimer_note(interaction: discord.Interaction, membre: discord.Membe
 
     conn = get_db_connection()
     c = conn.cursor()
-
     c.execute("SELECT id, note FROM opex WHERE discord_id = %s ORDER BY id DESC LIMIT 1", (str(membre.id),))
     row = c.fetchone()
 
@@ -429,8 +544,7 @@ async def historique(interaction: discord.Interaction, membre: discord.Member = 
 
     conn = get_db_connection()
     c = conn.cursor()
-    c.execute("SELECT nom_opex, note, commentaire, date, noter_par FROM opex WHERE discord_id = %s ORDER BY id DESC LIMIT 10",
-              (str(membre.id),))
+    c.execute("SELECT nom_opex, note, commentaire, date, noter_par FROM opex WHERE discord_id = %s ORDER BY id DESC LIMIT 10", (str(membre.id),))
     rows = c.fetchall()
     conn.close()
 
@@ -439,7 +553,6 @@ async def historique(interaction: discord.Interaction, membre: discord.Member = 
         return
 
     embed = discord.Embed(title=f"🗺️ Historique opex — {membre.display_name}", color=0x2C2F33)
-
     for r in rows:
         nom_opex, note, commentaire, date, noter_par = r
         valeur = f"Note : **{note}/10**"
@@ -475,11 +588,7 @@ async def classement(interaction: discord.Interaction):
 
     for i, (nom, grade, opex_count, moyenne) in enumerate(rows):
         prefix = medals[i] if i < 3 else f"{i+1}."
-        embed.add_field(
-            name=f"{prefix} {nom}",
-            value=f"**{grade}** • {opex_count} opex • Moyenne : **{moyenne}/10**",
-            inline=False
-        )
+        embed.add_field(name=f"{prefix} {nom}", value=f"**{grade}** • {opex_count} opex • Moyenne : **{moyenne}/10**", inline=False)
 
     embed.set_footer(text="GCP — Groupement de Commandos Parachutistes • Qui ose gagne.")
     await interaction.response.send_message(embed=embed)
@@ -488,19 +597,14 @@ async def classement(interaction: discord.Interaction):
 async def stats(interaction: discord.Interaction):
     conn = get_db_connection()
     c = conn.cursor()
-
     c.execute("SELECT COUNT(*) FROM membres")
     nb_membres = c.fetchone()[0]
-
     c.execute("SELECT SUM(opex_count) FROM membres")
     nb_opex = c.fetchone()[0] or 0
-
     c.execute("SELECT ROUND(AVG(note_total / note_count), 2) FROM membres WHERE note_count > 0")
     moyenne_generale = c.fetchone()[0] or "N/A"
-
     c.execute("SELECT nom, grade FROM membres WHERE note_count > 0 ORDER BY (note_total / note_count) DESC LIMIT 1")
     meilleur = c.fetchone()
-
     conn.close()
 
     embed = discord.Embed(title="📊 Statistiques GCP", color=0x2C2F33)
@@ -514,14 +618,9 @@ async def stats(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 @tree.command(name="absent", description="Déclarer une absence officielle, visible sur le profil")
-@app_commands.describe(
-    raison="Motif de l'absence",
-    duree="Durée estimée (ex: 3 jours, 1 semaine)",
-    membre="Membre concerné (Laissez vide pour vous-même)"
-)
+@app_commands.describe(raison="Motif de l'absence", duree="Durée estimée (ex: 3 jours, 1 semaine)", membre="Membre concerné (Laissez vide pour vous-même)")
 async def absent(interaction: discord.Interaction, raison: str, duree: str, membre: discord.Member = None):
     target = membre if membre else interaction.user
-    
     if membre and membre != interaction.user and not is_admin(interaction):
         await interaction.response.send_message("❌ Seul un administrateur peut déclarer l'absence d'un autre membre.", ephemeral=True)
         return
@@ -529,7 +628,6 @@ async def absent(interaction: discord.Interaction, raison: str, duree: str, memb
     conn = get_db_connection()
     c = conn.cursor()
     c.execute("UPDATE absences SET actif = FALSE WHERE discord_id = %s", (str(target.id),))
-    
     date_now = datetime.now(PARIS_TZ).strftime("%d/%m/%Y %H:%M")
     c.execute("INSERT INTO absences (discord_id, raison, duree, date_declaration, actif) VALUES (%s, %s, %s, %s, TRUE)",
               (str(target.id), raison, duree, date_now))
@@ -549,7 +647,6 @@ async def absent(interaction: discord.Interaction, raison: str, duree: str, memb
 @app_commands.describe(membre="Membre concerné (Laissez vide pour vous-même)")
 async def fin_absence(interaction: discord.Interaction, membre: discord.Member = None):
     target = membre if membre else interaction.user
-
     if membre and membre != interaction.user and not is_admin(interaction):
         await interaction.response.send_message("❌ Permission insuffisante.", ephemeral=True)
         return
@@ -679,17 +776,13 @@ async def ticket(interaction: discord.Interaction, raison: str):
 
     channel_name = f"ticket-{interaction.user.name}"
     ticket_channel = await guild.create_text_channel(
-        name=channel_name,
-        category=category,
-        overwrites=overwrites,
-        reason=f"Ticket ouvert par {interaction.user.name}"
+        name=channel_name, category=category, overwrites=overwrites, reason=f"Ticket ouvert par {interaction.user.name}"
     )
 
     embed = discord.Embed(
         title=f"🎟️ Ticket de {interaction.user.display_name}",
         description=f"**Raison :** {raison}\n\nUn membre du Staff prendra en charge votre demande sous peu.",
-        color=0x1ABC9C,
-        timestamp=datetime.now(PARIS_TZ)
+        color=0x1ABC9C, timestamp=datetime.now(PARIS_TZ)
     )
     embed.set_footer(text="Utilisez /fermer_ticket pour clôturer le salon.")
     
@@ -705,7 +798,6 @@ async def fermer_ticket(interaction: discord.Interaction):
 
     await interaction.response.send_message("🔒 Fermeture du ticket dans 5 secondes...")
     await send_log(bot, f"🔒 Ticket **{interaction.channel.name}** fermé par **{interaction.user.display_name}**")
-    import asyncio
     await asyncio.sleep(5)
     await interaction.channel.delete()
 
@@ -730,6 +822,8 @@ async def aide(interaction: discord.Interaction):
         name="👤 Membres",
         value=(
             "`/profil [@membre]` — Voir un profil\n"
+            "`/guide @membre` — Envoyer le guide d'accueil\n"
+            "`/reglement @membre` — Rappeler le règlement\n"
             "`/absent raison durée [@membre]` — Déclarer une absence\n"
             "`/fin_absence [@membre]` — Reprendre le service\n"
             "`/inscrire_opex nom_opex` — S'inscrire à une OPEX\n"
@@ -744,6 +838,7 @@ async def aide(interaction: discord.Interaction):
     embed.add_field(
         name="🔐 Gradés / Staff",
         value=(
+            "`!sync` — Synchroniser instantanément les commandes slash\n"
             "`/creer_opex nom date` — Créer une OPEX officielle\n"
             "`/recap_opex nom_opex` — Résumé des notes d'une OPEX\n"
             "`/enregistrer @membre nom` — Enregistrer un membre\n"
