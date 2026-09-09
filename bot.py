@@ -283,7 +283,7 @@ async def guide(interaction: discord.Interaction, membre: discord.Member):
     embed.set_footer(text="GCP — Groupement de Commandos Parachutistes • Qui ose gagne.")
     await interaction.response.send_message(content=f"👋 {membre.mention}, voici le guide de l'unité :", embed=embed)
 
-@tree.command(name="en_dev", description="en dev")
+@tree.command(name="en_dev1", description="en dev")
 @app_commands.describe(membre="Le membre concerné")
 async def reglement(interaction: discord.Interaction, membre: discord.Member):
     embed = discord.Embed(
