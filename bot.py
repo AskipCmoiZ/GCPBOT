@@ -23,7 +23,7 @@ WHITELIST_ROLES = [
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "1546764469143863377"))
 
 # ID de la catégorie pour les tickets
-TICKET_CATEGORY_ID = int(os.getenv("TICKET_CATEGORY_ID", "15342512603104584180"))
+TICKET_CATEGORY_ID = int(os.getenv("TICKET_CATEGORY_ID", "1534251260310458418"))
 
 # ID du salon pour le message programmé du vendredi après-midi
 SCHEDULED_CHANNEL_ID = int(os.getenv("SCHEDULED_CHANNEL_ID", "0"))
