@@ -269,7 +269,7 @@ async def sync(ctx):
     synced = await bot.tree.sync(guild=ctx.guild)
     await ctx.send(f"✅ **{len(synced)}** commandes slash synchronisées instantanément sur ce serveur !")
 
-@tree.command(name="en dev", description="en dev")
+@tree.command(name="en_dev", description="en dev")
 @app_commands.describe(membre="Le membre à qui adresser le guide")
 async def guide(interaction: discord.Interaction, membre: discord.Member):
     embed = discord.Embed(
@@ -283,7 +283,7 @@ async def guide(interaction: discord.Interaction, membre: discord.Member):
     embed.set_footer(text="GCP — Groupement de Commandos Parachutistes • Qui ose gagne.")
     await interaction.response.send_message(content=f"👋 {membre.mention}, voici le guide de l'unité :", embed=embed)
 
-@tree.command(name="en dev", description="en dev")
+@tree.command(name="en_dev", description="en dev")
 @app_commands.describe(membre="Le membre concerné")
 async def reglement(interaction: discord.Interaction, membre: discord.Member):
     embed = discord.Embed(
