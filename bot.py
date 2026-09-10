@@ -269,19 +269,40 @@ async def sync(ctx):
     synced = await bot.tree.sync(guild=ctx.guild)
     await ctx.send(f"✅ **{len(synced)}** commandes slash synchronisées instantanément sur ce serveur !")
 
-@tree.command(name="en_dev", description="en dev")
+@tree.command(name="guide", description="Envoyer le guide d'accueil du GCP")
 @app_commands.describe(membre="Le membre à qui adresser le guide")
 async def guide(interaction: discord.Interaction, membre: discord.Member):
+    contenu_guide = (
+        "Bienvenue au **GCP** !\n\n"
+        "Content de te voir parmi nous. Voici les infos essentielles pour bien démarrer.\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "**À lire en premier**\n"
+        "<#1522050114380763336> — Les règles de vie de l'unité, lis-le avant tout\n"
+        "<#1521141864168689694> — Tout ce qu'il faut pour installer les mods et jouer avec nous\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "**Pour jouer**\n"
+        "<#1521145582851199130> — Les dates et horaires des prochaines OPEX\n"
+        "<#1521140854977331210> — Les infos importantes des OPEX\n"
+        "<#1523387051532091592> — Si tu découvres Arma 3, commence par là\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "**Une question ? Un problème avec le modpack ?**\n"
+        "Demande dans <#1521141900126720041>, on est là pour t'aider.\n\n\n"
+        "Bonne arrivée, et à bientôt sur le terrain !\n\n"
+        "*\"Qui ose gagne.\"*\n"
+        "**— Commandement GCP**"
+    )
+
     embed = discord.Embed(
-        title="en dev",
-        description=(
-            f"en dev"
-            
-        ),
+        title="📖 Guide d'accueil GCP",
+        description=contenu_guide,
         color=0x3498DB
     )
     embed.set_footer(text="GCP — Groupement de Commandos Parachutistes • Qui ose gagne.")
-    await interaction.response.send_message(content=f"👋 {membre.mention}, voici le guide de l'unité :", embed=embed)
+    
+    await interaction.response.send_message(
+        content=f"👋 {membre.mention}, voici le guide de l'unité :",
+        embed=embed
+    )
 
 @tree.command(name="en_dev1", description="en dev")
 @app_commands.describe(membre="Le membre concerné")
