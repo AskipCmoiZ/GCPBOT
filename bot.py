@@ -263,7 +263,21 @@ class CombatView(discord.ui.View):
         if score_joueur >= score_ennemi:
             gain_xp = random.randint(15, 30)
             gain_credits = random.randint(20, 50)
-            
+
+            # 1. Progression XP & Niveau progressif (Seuil = Niveau * 100 XP)
+            xp_total = self.stats["xp"] + gain_xp
+            temp_xp = xp_total
+            nouveau_niveau = 1
+            xp_seuil = nouveau_niveau * 100
+
+            while temp_xp >= xp_seuil:
+                temp_xp -= xp_seuil
+                nouveau_niveau += 1
+                xp_seuil = nouveau_niveau * 100
+
+            a_gagne_niveau = nouveau_niveau > self.stats["niveau"]
+
+            # 2. Progression du secteur / théâtre
             nouveau_secteur = self.stats["secteur"] + 1
             nouveau_theatre = self.stats["theatre"]
             msg_progression = f"Secteur {self.stats['secteur']} sécurisé !"
@@ -278,15 +292,44 @@ class CombatView(discord.ui.View):
                 else:
                     msg_progression = "🏆 **VICTOIRE TOTALE !** Tu as nettoyé tous les théâtres d'opérations !"
 
+            # 3. Gestion de l'énergie (3 mécaniques combinées)
+            energie_actuelle = max(0, self.stats["energie"] - 1)
+            msgs_energie = []
+            bonus_energie = 0
+
+            if a_gagne_niveau:
+                nouvelle_energie = self.stats["max_energie"]
+                msgs_energie.append(f"🎖️ **Niveau supérieur !** Tu passes Niveau {nouveau_niveau} (Énergie restaurée à 100 % !)")
+            else:
+                # Bonus d'étape : secteur 5 validé ou passage de théâtre
+                if self.stats["secteur"] == 5 or self.stats["secteur"] == 10:
+                    bonus_energie += 1
+                    msgs_energie.append("🔋 **Bonus d'étape :** +1 Énergie !")
+
+                # Loot consommable (15 % de chances)
+                if random.random() < 0.15:
+                    bonus_energie += 1
+                    msgs_energie.append("🧪 **Ravitaillement :** Ration de combat trouvée (+1 Énergie) !")
+
+                nouvelle_energie = min(self.stats["max_energie"], energie_actuelle + bonus_energie)
+
+            # Mise à jour en base de données
             c.execute(
-                "UPDATE campagne_joueurs SET xp = xp + %s, credits = credits + %s, secteur = %s, theatre = %s WHERE discord_id = %s",
-                (gain_xp, gain_credits, nouveau_secteur, nouveau_theatre, str(self.user_id))
+                """UPDATE campagne_joueurs 
+                   SET xp = %s, niveau = %s, credits = credits + %s, secteur = %s, theatre = %s, energie = %s 
+                   WHERE discord_id = %s""",
+                (xp_total, nouveau_niveau, gain_credits, nouveau_secteur, nouveau_theatre, nouvelle_energie, str(self.user_id))
             )
             
+            # Roll de loot d'équipement (40 % de chances)
             loot_msg = ""
             if random.random() < 0.40:
                 loot = generer_loot(self.user_id)
                 loot_msg = f"\n📦 **Loot trouvé :** `{loot[0]}` ({loot[2]} — +{loot[4]} {loot[3]})"
+
+            str_energie_info = "\n".join(msgs_energie)
+            if str_energie_info:
+                str_energie_info = "\n\n" + str_energie_info
 
             embed = discord.Embed(
                 title=f"🟢 Victoire Tactique ! — {self.ennemie_nom}",
@@ -294,7 +337,9 @@ class CombatView(discord.ui.View):
                     f"Action entreprise : **{stat_utilisee.capitalize()}** {emoji}\n\n"
                     f"🎯 Score : **{score_joueur}** vs **{score_ennemi}** (Ennemi)\n"
                     f"📈 **Gains :** +{gain_xp} XP • +{gain_credits} Crédits\n"
-                    f"🗺️ {msg_progression}{loot_msg}"
+                    f"🗺️ {msg_progression}"
+                    f"{str_energie_info}"
+                    f"{loot_msg}"
                 ),
                 color=0x2ECC71
             )
