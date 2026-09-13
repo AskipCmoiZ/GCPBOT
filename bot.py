@@ -526,16 +526,28 @@ async def guide(interaction: discord.Interaction, membre: discord.Member):
         embed=embed
     )
 
-@tree.command(name="en_dev1", description="en dev")
-@app_commands.describe(membre="Le membre concerné")
-async def reglement(interaction: discord.Interaction, membre: discord.Member):
+@tree.command(name="tuto_jeu", description="Afficher le guide d'explication du mini-jeu de campagne")
+async def tuto_jeu(interaction: discord.Interaction):
     embed = discord.Embed(
-        title="en dev",
-        description="en dev",
-        color=0xE74C3C
+        title="🎮 Briefing Tactique — Mini-Jeu Campagne GCP",
+        description=(
+            "Bienvenue dans le mini-jeu du GCP ! Tu incarnes un commando déployé sur différents théâtres d'opérations (Malden, Tanoa, Altis, Takistan). "
+            "Ton objectif : sécuriser les secteurs les uns après les autres, faire monter ton niveau et obtenir le meilleur équipement possible.\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "**1. Ton Profil (`/campagne`)**\n"
+            "Consulte tes statistiques principales (**Précision**, **Blindage**, **Furtivité**), ton niveau actuel, tes crédits et ton réserve d'énergie.\n\n"
+            "**2. Le Déploiement (`/deploiement`)**\n"
+            "Lancer une mission consomme 1 point d'énergie. Face à la menace détectée, choisis l'approche tactique la plus adaptée. "
+            "La réussite du combat dépend de ta statistique et d'un jet de dé.\n\n"
+            "**3. Victoires & Progression**\n"
+            "Chaque succès te fait avancer au secteur suivant, te rapporte de l'XP, des crédits et te donne **40 % de chances de trouver du matériel**.\n\n"
+            "**4. L'Équipement (`/inventaire` & `/equiper`)**\n"
+            "Le loot va de *Commun* à *Mythique*. Équipe ton matériel via son ID pour augmenter tes caractéristiques et réussir les secteurs plus difficiles !"
+        ),
+        color=0x3498DB
     )
     embed.set_footer(text="GCP — Groupement de Commandos Parachutistes • Qui ose gagne.")
-    await interaction.response.send_message(content=f"📢 {membre.mention}, merci de relire le règlement :", embed=embed)
+    await interaction.response.send_message(embed=embed)
 
 @tree.command(name="profil", description="Affiche le profil d'un membre du GCP")
 @app_commands.describe(membre="Le membre dont tu veux voir le profil")
