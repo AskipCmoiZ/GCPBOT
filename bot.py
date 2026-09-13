@@ -255,7 +255,8 @@ class CombatView(discord.ui.View):
     async def resoudre_combat(self, interaction: discord.Interaction, stat_utilisee: str, emoji: str):
         valeur_stat = self.stats[stat_utilisee]
         score_joueur = valeur_stat + random.randint(1, 20)
-        score_ennemi = self.difficulte + random.randint(1, 20)
+        # Équilibrage : Dé ennemi réduit à (1-12)
+        score_ennemi = self.difficulte + random.randint(1, 12)
 
         conn = get_db_connection()
         c = conn.cursor()
@@ -284,7 +285,7 @@ class CombatView(discord.ui.View):
             )
             
             loot_msg = ""
-            if random.random() < 0.35:
+            if random.random() < 0.40:  # Taux de loot ajusté à 40%
                 loot = generer_loot(self.user_id)
                 loot_msg = f"\n📦 **Loot trouvé :** `{loot[0]}` ({loot[2]} — +{loot[4]} {loot[3]})"
 
@@ -1103,12 +1104,13 @@ async def deploiement(interaction: discord.Interaction):
     conn.commit()
     conn.close()
 
+    # Difficultés ajustées pour offrir un démarrage équilibré
     ennemis = [
-        ("Patrouille d'infanterie légère", 12),
-        ("Nid de mitrailleuse fortifié", 18),
-        ("Tireur d'élite embusqué", 15),
-        ("Convoi de ravitaillement blindé", 22),
-        ("Poste de commandement avancé", 25)
+        ("Patrouille d'infanterie légère", 2),
+        ("Tireur d'élite embusqué", 4),
+        ("Nid de mitrailleuse fortifié", 5),
+        ("Convoi de ravitaillement blindé", 7),
+        ("Poste de commandement avancé", 8)
     ]
     nom_ennemi, difficulte = random.choice(ennemis)
     difficulte_totale = difficulte + (stats_joueur["secteur"] * 2)
