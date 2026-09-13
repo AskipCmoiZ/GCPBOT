@@ -255,7 +255,6 @@ class CombatView(discord.ui.View):
     async def resoudre_combat(self, interaction: discord.Interaction, stat_utilisee: str, emoji: str):
         valeur_stat = self.stats[stat_utilisee]
         score_joueur = valeur_stat + random.randint(1, 20)
-        # Équilibrage : Dé ennemi réduit à (1-12)
         score_ennemi = self.difficulte + random.randint(1, 12)
 
         conn = get_db_connection()
@@ -285,7 +284,7 @@ class CombatView(discord.ui.View):
             )
             
             loot_msg = ""
-            if random.random() < 0.40:  # Taux de loot ajusté à 40%
+            if random.random() < 0.40:
                 loot = generer_loot(self.user_id)
                 loot_msg = f"\n📦 **Loot trouvé :** `{loot[0]}` ({loot[2]} — +{loot[4]} {loot[3]})"
 
@@ -392,6 +391,16 @@ async def on_member_join(member: discord.Member):
 async def rotate_status():
     await bot.change_presence(activity=next(status_list))
 
+@tasks.loop(minutes=15)
+async def regen_energie():
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute(
+        "UPDATE campagne_joueurs SET energie = LEAST(max_energie, energie + 1) WHERE energie < max_energie"
+    )
+    conn.commit()
+    conn.close()
+
 @tasks.loop(hours=1)
 async def scheduled_friday_message():
     now = datetime.now(PARIS_TZ)
@@ -476,6 +485,8 @@ async def on_ready():
         rotate_status.start()
     if not check_twitch_live.is_running():
         check_twitch_live.start()
+    if not regen_energie.is_running():
+        regen_energie.start()
     await tree.sync()
     print(f"✅ Bot GCP connecté : {bot.user}")
 
@@ -1075,12 +1086,23 @@ async def config_whitelist(interaction: discord.Interaction):
 async def campagne(interaction: discord.Interaction):
     stats_joueur = get_stats_totales(interaction.user.id)
 
+    if stats_joueur["energie"] < stats_joueur["max_energie"]:
+        if regen_energie.is_running() and regen_energie.next_iteration:
+            now = datetime.now(pytz.utc)
+            delta = regen_energie.next_iteration - now
+            minutes_restantes = max(1, int(delta.total_seconds() // 60))
+            texte_energie = f"{stats_joueur['energie']} / {stats_joueur['max_energie']} ⏳ *(+1 dans {minutes_restantes} min)*"
+        else:
+            texte_energie = f"{stats_joueur['energie']} / {stats_joueur['max_energie']}"
+    else:
+        texte_energie = f"{stats_joueur['energie']} / {stats_joueur['max_energie']} 🟢 *(Plein)*"
+
     embed = discord.Embed(
         title=f"🪖 Fiche Campagne — {interaction.user.display_name}",
         color=0x3498DB
     )
     embed.add_field(name="🗺️ Théâtre actuel", value=f"**{stats_joueur['theatre']}** (Secteur {stats_joueur['secteur']}/10)", inline=False)
-    embed.add_field(name="⚡ Énergie", value=f"{stats_joueur['energie']} / {stats_joueur['max_energie']}", inline=True)
+    embed.add_field(name="⚡ Énergie", value=texte_energie, inline=True)
     embed.add_field(name="🎖️ Niveau", value=f"{stats_joueur['niveau']} ({stats_joueur['xp']} XP)", inline=True)
     embed.add_field(name="💰 Crédits", value=f"{stats_joueur['credits']} 🪙", inline=True)
     
@@ -1116,7 +1138,6 @@ async def deploiement(interaction: discord.Interaction):
     conn.commit()
     conn.close()
 
-    # Difficultés ajustées pour offrir un démarrage équilibré
     ennemis = [
         ("Patrouille d'infanterie légère", 2),
         ("Tireur d'élite embusqué", 4),
