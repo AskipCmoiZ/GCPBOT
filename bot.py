@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime
 from itertools import cycle
 import os
+import random
 import aiohttp
 import discord
 from discord import app_commands
@@ -44,7 +45,7 @@ TWITCH_DISCORD_CHANNEL_ID = int(os.getenv("TWITCH_DISCORD_CHANNEL_ID", "15471996
 PARIS_TZ = pytz.timezone("Europe/Paris")
 
 # ==========================================
-# BASE DE DONNÉES
+# BASE DE DONNÉES & JEU
 # ==========================================
 
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -85,6 +86,31 @@ def init_db():
         date_inscription TEXT, UNIQUE(nom_opex, discord_id)
     )""")
 
+    c.execute("""CREATE TABLE IF NOT EXISTS campagne_joueurs (
+        discord_id TEXT PRIMARY KEY,
+        theatre TEXT DEFAULT 'Malden',
+        secteur INTEGER DEFAULT 1,
+        niveau INTEGER DEFAULT 1,
+        xp INTEGER DEFAULT 0,
+        credits INTEGER DEFAULT 100,
+        energie INTEGER DEFAULT 5,
+        max_energie INTEGER DEFAULT 5,
+        stat_precision INTEGER DEFAULT 10,
+        stat_blindage INTEGER DEFAULT 10,
+        stat_furtivite INTEGER DEFAULT 10
+    )""")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS inventaire_joueurs (
+        id SERIAL PRIMARY KEY,
+        discord_id TEXT,
+        nom_item TEXT,
+        type_item TEXT,
+        rarete TEXT,
+        bonus_stat TEXT,
+        valeur_bonus INTEGER,
+        equipe BOOLEAN DEFAULT FALSE
+    )""")
+    
     conn.commit()
     conn.close()
 
@@ -111,6 +137,201 @@ def get_absence_active(discord_id):
     row = c.fetchone()
     conn.close()
     return row
+
+# ==========================================
+# FONCTIONS LOGIQUE DU MINI-JEU
+# ==========================================
+
+def get_or_create_joueur(discord_id: int):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT * FROM campagne_joueurs WHERE discord_id = %s", (str(discord_id),))
+    row = c.fetchone()
+    if not row:
+        c.execute(
+            "INSERT INTO campagne_joueurs (discord_id) VALUES (%s) RETURNING *",
+            (str(discord_id),)
+        )
+        row = c.fetchone()
+        conn.commit()
+    conn.close()
+    return row
+
+def get_stats_totales(discord_id: int):
+    joueur = get_or_create_joueur(discord_id)
+    prec = joueur[8]
+    blin = joueur[9]
+    furt = joueur[10]
+
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute(
+        "SELECT bonus_stat, valeur_bonus FROM inventaire_joueurs WHERE discord_id = %s AND equipe = TRUE",
+        (str(discord_id),)
+    )
+    items = c.fetchall()
+    conn.close()
+
+    for stat, bonus in items:
+        if stat == "precision":
+            prec += bonus
+        elif stat == "blindage":
+            blin += bonus
+        elif stat == "furtivite":
+            furt += bonus
+
+    return {
+        "theatre": joueur[1],
+        "secteur": joueur[2],
+        "niveau": joueur[3],
+        "xp": joueur[4],
+        "credits": joueur[5],
+        "energie": joueur[6],
+        "max_energie": joueur[7],
+        "precision": prec,
+        "blindage": blin,
+        "furtivite": furt
+    }
+
+def generer_loot(discord_id: int):
+    base_loots = {
+        "Commun": [
+            ("Gilet Porte-Plaques", "Gilet", "Commun", "blindage", 5),
+            ("Silencieux Tactique", "Accessoire", "Commun", "furtivite", 4),
+            ("Viseur Red Dot", "Accessoire", "Commun", "precision", 3)
+        ],
+        "Rare": [
+            ("Viseur Holo EOTech", "Accessoire", "Rare", "precision", 5),
+            ("HK416 A5", "Arme", "Rare", "precision", 10),
+            ("Casque Ops-Core FAST", "Gilet", "Rare", "blindage", 8),
+            ("Tenue Camouflage Ghillie", "Accessoire", "Rare", "furtivite", 7)
+        ],
+        "Épique": [
+            ("FN SCAR-H", "Arme", "Épique", "precision", 15),
+            ("Gilet Tactique Lourd", "Gilet", "Épique", "blindage", 14),
+            ("Micro-Drone Recon", "Accessoire", "Épique", "furtivite", 12)
+        ],
+        "Légendaire": [
+            ("PGM Hécate II", "Arme", "Légendaire", "precision", 20),
+            ("Lunettes NVG GPNVG-18", "Accessoire", "Légendaire", "furtivite", 15)
+        ],
+        "Mythique": [
+            ("Exosquelette GCP Prototype", "Gilet", "Mythique", "blindage", 30),
+            ("Lance-Roquettes NLAW", "Arme", "Mythique", "precision", 35)
+        ]
+    }
+
+    raretes = ["Commun", "Rare", "Épique", "Légendaire", "Mythique"]
+    poids = [50, 35, 15, 5, 0.5]
+
+    rarete_choisie = random.choices(raretes, weights=poids, k=1)[0]
+    item = random.choice(base_loots[rarete_choisie])
+    nom, type_i, rarete, stat, bonus = item
+
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO inventaire_joueurs (discord_id, nom_item, type_item, rarete, bonus_stat, valeur_bonus) VALUES (%s, %s, %s, %s, %s, %s)",
+        (str(discord_id), nom, type_i, rarete, stat, bonus)
+    )
+    conn.commit()
+    conn.close()
+    return item
+
+class CombatView(discord.ui.View):
+    def __init__(self, user_id: int, stats: dict, ennemie_nom: str, difficulte: int):
+        super().__init__(timeout=60)
+        self.user_id = user_id
+        self.stats = stats
+        self.ennemie_nom = ennemie_nom
+        self.difficulte = difficulte
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("❌ Tu ne peux pas interagir avec le déploiement d'un autre opérateur.", ephemeral=True)
+            return False
+        return True
+
+    async def resoudre_combat(self, interaction: discord.Interaction, stat_utilisee: str, emoji: str):
+        valeur_stat = self.stats[stat_utilisee]
+        score_joueur = valeur_stat + random.randint(1, 20)
+        score_ennemi = self.difficulte + random.randint(1, 20)
+
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        if score_joueur >= score_ennemi:
+            gain_xp = random.randint(15, 30)
+            gain_credits = random.randint(20, 50)
+            
+            nouveau_secteur = self.stats["secteur"] + 1
+            nouveau_theatre = self.stats["theatre"]
+            msg_progression = f"Secteur {self.stats['secteur']} sécurisé !"
+
+            if nouveau_secteur > 10:
+                nouveau_secteur = 1
+                theatres = ["Malden", "Tanoa", "Altis", "Takistan"]
+                idx = theatres.index(nouveau_theatre)
+                if idx + 1 < len(theatres):
+                    nouveau_theatre = theatres[idx + 1]
+                    msg_progression = f"🎉 **THÉÂTRE NETTOYÉ !** Tu es redéployé sur **{nouveau_theatre}** !"
+                else:
+                    msg_progression = "🏆 **VICTOIRE TOTALE !** Tu as nettoyé tous les théâtres d'opérations !"
+
+            c.execute(
+                "UPDATE campagne_joueurs SET xp = xp + %s, credits = credits + %s, secteur = %s, theatre = %s WHERE discord_id = %s",
+                (gain_xp, gain_credits, nouveau_secteur, nouveau_theatre, str(self.user_id))
+            )
+            
+            loot_msg = ""
+            if random.random() < 0.35:
+                loot = generer_loot(self.user_id)
+                loot_msg = f"\n📦 **Loot trouvé :** `{loot[0]}` ({loot[2]} — +{loot[4]} {loot[3]})"
+
+            embed = discord.Embed(
+                title=f"🟢 Victoire Tactique ! — {self.ennemie_nom}",
+                description=(
+                    f"Action entreprise : **{stat_utilisee.capitalize()}** {emoji}\n\n"
+                    f"🎯 Score : **{score_joueur}** vs **{score_ennemi}** (Ennemi)\n"
+                    f"📈 **Gains :** +{gain_xp} XP • +{gain_credits} Crédits\n"
+                    f"🗺️ {msg_progression}{loot_msg}"
+                ),
+                color=0x2ECC71
+            )
+        else:
+            c.execute(
+                "UPDATE campagne_joueurs SET xp = GREATEST(0, xp - 5) WHERE discord_id = %s",
+                (str(self.user_id),)
+            )
+            embed = discord.Embed(
+                title=f"🔴 Échec de la mission — {self.ennemie_nom}",
+                description=(
+                    f"Action entreprise : **{stat_utilisee.capitalize()}** {emoji}\n\n"
+                    f"🎯 Score : **{score_joueur}** vs **{score_ennemi}** (Ennemi)\n"
+                    "L'ennemi a pris le dessus. Repli tactique effectué (-5 XP)."
+                ),
+                color=0xE74C3C
+            )
+
+        conn.commit()
+        conn.close()
+
+        for item in self.children:
+            item.disabled = True
+
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    @discord.ui.button(label="Assaut Précis", style=discord.ButtonStyle.primary, emoji="🎯")
+    async def bouton_precision(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.resoudre_combat(interaction, "precision", "🎯")
+
+    @discord.ui.button(label="Infiltration Furtive", style=discord.ButtonStyle.secondary, emoji="🥷")
+    async def bouton_furtivite(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.resoudre_combat(interaction, "furtivite", "🥷")
+
+    @discord.ui.button(label="Contact Direct (Blindage)", style=discord.ButtonStyle.danger, emoji="🛡️")
+    async def bouton_blindage(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.resoudre_combat(interaction, "blindage", "🛡️")
 
 def is_admin(ctx_or_interaction) -> bool:
     user = ctx_or_interaction.user if hasattr(ctx_or_interaction, "user") else ctx_or_interaction.author
@@ -142,6 +363,7 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
+# STATUTS ROTATIFS
 status_list = cycle([
     discord.Game(name="/aide"),
     discord.Activity(type=discord.ActivityType.watching, name="Kain FAVEL le meilleur Colonel"),
@@ -832,6 +1054,137 @@ async def config_whitelist(interaction: discord.Interaction):
 
     await interaction.response.send_message(msg, ephemeral=True)
 
+# ==========================================
+# COMMANDES SLASH DU MINI-JEU
+# ==========================================
+
+@tree.command(name="campagne", description="Consulter ta fiche d'opérateur en campagne")
+async def campagne(interaction: discord.Interaction):
+    stats_joueur = get_stats_totales(interaction.user.id)
+
+    embed = discord.Embed(
+        title=f"🪖 Fiche Campagne — {interaction.user.display_name}",
+        color=0x3498DB
+    )
+    embed.add_field(name="🗺️ Théâtre actuel", value=f"**{stats_joueur['theatre']}** (Secteur {stats_joueur['secteur']}/10)", inline=False)
+    embed.add_field(name="⚡ Énergie", value=f"{stats_joueur['energie']} / {stats_joueur['max_energie']}", inline=True)
+    embed.add_field(name="🎖️ Niveau", value=f"{stats_joueur['niveau']} ({stats_joueur['xp']} XP)", inline=True)
+    embed.add_field(name="💰 Crédits", value=f"{stats_joueur['credits']} 🪙", inline=True)
+    
+    embed.add_field(
+        name="📊 Statistiques globales (Base + Équipement)",
+        value=(
+            f"🎯 **Précision :** {stats_joueur['precision']}\n"
+            f"🛡️ **Blindage :** {stats_joueur['blindage']}\n"
+            f"🥷 **Furtivité :** {stats_joueur['furtivite']}"
+        ),
+        inline=False
+    )
+    embed.set_footer(text="GCP Campagne V1 • /deploiement pour lancer une mission")
+    await interaction.response.send_message(embed=embed)
+
+@tree.command(name="deploiement", description="Lancer une mission d'infiltration dans le secteur actuel")
+async def deploiement(interaction: discord.Interaction):
+    stats_joueur = get_stats_totales(interaction.user.id)
+
+    if stats_joueur["energie"] < 1:
+        await interaction.response.send_message(
+            "❌ Tu n'as plus d'énergie pour partir en mission !",
+            ephemeral=True
+        )
+        return
+
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute(
+        "UPDATE campagne_joueurs SET energie = energie - 1 WHERE discord_id = %s",
+        (str(interaction.user.id),)
+    )
+    conn.commit()
+    conn.close()
+
+    ennemis = [
+        ("Patrouille d'infanterie légère", 12),
+        ("Nid de mitrailleuse fortifié", 18),
+        ("Tireur d'élite embusqué", 15),
+        ("Convoi de ravitaillement blindé", 22),
+        ("Poste de commandement avancé", 25)
+    ]
+    nom_ennemi, difficulte = random.choice(ennemis)
+    difficulte_totale = difficulte + (stats_joueur["secteur"] * 2)
+
+    embed = discord.Embed(
+        title=f"🚨 Infiltration — Secteur {stats_joueur['secteur']} ({stats_joueur['theatre']})",
+        description=(
+            f"**Cible détectée :** {nom_ennemi}\n"
+            f"**Niveau de menace :** {difficulte_totale}\n\n"
+            "Choisissez l'approche tactique pour traiter la menace :"
+        ),
+        color=0xE67E22
+    )
+    embed.set_footer(text=f"Énergie restante : {stats_joueur['energie'] - 1}/{stats_joueur['max_energie']}")
+
+    view = CombatView(interaction.user.id, stats_joueur, nom_ennemi, difficulte_totale)
+    await interaction.response.send_message(embed=embed, view=view)
+
+@tree.command(name="inventaire", description="Voir ton équipement et tes objets de loot")
+async def inventaire(interaction: discord.Interaction):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute(
+        "SELECT id, nom_item, type_item, rarete, bonus_stat, valeur_bonus, equipe FROM inventaire_joueurs WHERE discord_id = %s",
+        (str(interaction.user.id),)
+    )
+    items = c.fetchall()
+    conn.close()
+
+    if not items:
+        await interaction.response.send_message("📦 Ton inventaire est vide. Effectue des missions `/deploiement` pour trouver du loot !", ephemeral=True)
+        return
+
+    embed = discord.Embed(title=f"📦 Inventaire de {interaction.user.display_name}", color=0x9B59B6)
+    
+    text_inv = ""
+    for item_id, nom, type_i, rarete, stat, bonus, equipe in items:
+        statut = "🟢 **[ÉQUIPÉ]**" if equipe else f"ID: `{item_id}`"
+        text_inv += f"• **{nom}** ({rarete}) — {type_i}\n └ Bonus : +{bonus} {stat} | {statut}\n\n"
+
+    embed.description = text_inv
+    embed.set_footer(text="Utilise /equiper [id] pour mettre un objet")
+    await interaction.response.send_message(embed=embed)
+
+@tree.command(name="equiper", description="Équiper un objet de ton inventaire grâce à son ID")
+@app_commands.describe(item_id="L'ID de l'objet visible dans ton /inventaire")
+async def equiper(interaction: discord.Interaction, item_id: int):
+    conn = get_db_connection()
+    c = conn.cursor()
+    
+    c.execute(
+        "SELECT type_item, nom_item FROM inventaire_joueurs WHERE id = %s AND discord_id = %s",
+        (item_id, str(interaction.user.id))
+    )
+    item = c.fetchone()
+
+    if not item:
+        conn.close()
+        await interaction.response.send_message("❌ Objet introuvable dans ton inventaire.", ephemeral=True)
+        return
+
+    type_i, nom = item
+
+    c.execute(
+        "UPDATE inventaire_joueurs SET equipe = FALSE WHERE discord_id = %s AND type_item = %s",
+        (str(interaction.user.id), type_i)
+    )
+    c.execute(
+        "UPDATE inventaire_joueurs SET equipe = TRUE WHERE id = %s",
+        (item_id,)
+    )
+    conn.commit()
+    conn.close()
+
+    await interaction.response.send_message(f"✅ Tu as équipé : **{nom}** !", ephemeral=True)
+
 @tree.command(name="aide", description="Liste toutes les commandes du bot GCP")
 async def aide(interaction: discord.Interaction):
     embed = discord.Embed(title="📋 Commandes du Bot GCP", color=0x2C2F33)
@@ -840,6 +1193,7 @@ async def aide(interaction: discord.Interaction):
         value=(
             "`/profil [@membre]` — Voir un profil\n"
             "`/guide @membre` — Envoyer le guide d'accueil\n"
+            "`/en_dev1 @membre` — Rappeler le règlement\n"
             "`/absent raison durée [@membre]` — Déclarer une absence\n"
             "`/fin_absence [@membre]` — Reprendre le service\n"
             "`/inscrire_opex nom_opex` — S'inscrire à une OPEX\n"
@@ -848,6 +1202,16 @@ async def aide(interaction: discord.Interaction):
             "`/historique [@membre]` — Historique opex\n"
             "`/classement` — Top membres\n"
             "`/stats` — Statistiques de l'unité"
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="🎮 Mini-Jeu Campagne",
+        value=(
+            "`/campagne` — Consulter ton niveau, stats et énergie\n"
+            "`/deploiement` — Partir en mission d'infiltration\n"
+            "`/inventaire` — Consulter ton matériel et loot\n"
+            "`/equiper item_id` — Équiper une arme ou un accessoire"
         ),
         inline=False
     )
