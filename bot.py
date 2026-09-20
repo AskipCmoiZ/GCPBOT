@@ -30,7 +30,7 @@ AUTO_ROLE_ID = int(os.getenv("AUTO_ROLE_ID", "1528963080900317315"))
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "1546764469143863377"))
 
 # ID du salon pour les messages de bienvenue et de départ (0 pour désactiver)
-WELCOME_CHANNEL_ID = int(os.getenv("WELCOME_CHANNEL_ID", "123456789012345678"))
+WELCOME_CHANNEL_ID = int(os.getenv("WELCOME_CHANNEL_ID", "1523519203225637044"))
 
 # ID de la catégorie pour les tickets
 TICKET_CATEGORY_ID = int(os.getenv("TICKET_CATEGORY_ID", "1534251260310458418"))
