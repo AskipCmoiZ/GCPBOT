@@ -29,6 +29,9 @@ AUTO_ROLE_ID = int(os.getenv("AUTO_ROLE_ID", "1528963080900317315"))
 # ID du salon de logs (0 pour désactiver)
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "1546764469143863377"))
 
+# ID du salon pour les messages de bienvenue et de départ (0 pour désactiver)
+WELCOME_CHANNEL_ID = int(os.getenv("WELCOME_CHANNEL_ID", "123456789012345678"))
+
 # ID de la catégorie pour les tickets
 TICKET_CATEGORY_ID = int(os.getenv("TICKET_CATEGORY_ID", "1534251260310458418"))
 
@@ -431,6 +434,52 @@ async def on_member_join(member: discord.Member):
                 await send_log(bot, f"👤 **{member.display_name}** a rejoint le serveur et a reçu le rôle **{role.name}**.")
             except discord.Forbidden:
                 print(f"❌ Impossible d'attribuer le rôle à {member.display_name} (permissions insuffisantes).")
+
+    if WELCOME_CHANNEL_ID:
+        channel = member.guild.get_channel(WELCOME_CHANNEL_ID)
+        if channel:
+            date_creation = member.created_at.astimezone(PARIS_TZ).strftime("%d/%m/%Y à %H:%M")
+            date_arrivee = member.joined_at.astimezone(PARIS_TZ).strftime("%d/%m/%Y à %H:%M") if member.joined_at else "Inconnue"
+            
+            embed = discord.Embed(
+                title="🟢 Nouveau membre !",
+                description=f"Bienvenue {member.mention} sur le serveur **{member.guild.name}** !",
+                color=0x2ECC71,
+                timestamp=datetime.now(PARIS_TZ)
+            )
+            embed.set_thumbnail(url=member.display_avatar.url)
+            embed.add_field(name="👤 Pseudo", value=f"{member.name} ({member.display_name})", inline=True)
+            embed.add_field(name="🆔 ID Discord", value=f"`{member.id}`", inline=True)
+            embed.add_field(name="👥 Total membres", value=f"**{member.guild.member_count}**", inline=True)
+            embed.add_field(name="📅 Compte créé le", value=date_creation, inline=False)
+            embed.add_field(name="🛬 Rejoint le", value=date_arrivee, inline=False)
+            embed.set_footer(text="GCP Bot • Système de bienvenue")
+
+            await channel.send(embed=embed)
+
+@bot.event
+async def on_member_remove(member: discord.Member):
+    if WELCOME_CHANNEL_ID:
+        channel = member.guild.get_channel(WELCOME_CHANNEL_ID)
+        if channel:
+            date_creation = member.created_at.astimezone(PARIS_TZ).strftime("%d/%m/%Y à %H:%M")
+            date_arrivee = member.joined_at.astimezone(PARIS_TZ).strftime("%d/%m/%Y à %H:%M") if member.joined_at else "Inconnue"
+
+            embed = discord.Embed(
+                title="🔴 Départ d'un membre",
+                description=f"**{member.display_name}** a quitté le serveur.",
+                color=0xE74C3C,
+                timestamp=datetime.now(PARIS_TZ)
+            )
+            embed.set_thumbnail(url=member.display_avatar.url)
+            embed.add_field(name="👤 Pseudo", value=f"{member.name} ({member.display_name})", inline=True)
+            embed.add_field(name="🆔 ID Discord", value=f"`{member.id}`", inline=True)
+            embed.add_field(name="👥 Total membres restant", value=f"**{member.guild.member_count}**", inline=True)
+            embed.add_field(name="📅 Compte créé le", value=date_creation, inline=False)
+            embed.add_field(name="🛫 Était arrivé le", value=date_arrivee, inline=False)
+            embed.set_footer(text="GCP Bot • Système de suivi")
+
+            await channel.send(embed=embed)
 
 @tasks.loop(minutes=5)
 async def rotate_status():
