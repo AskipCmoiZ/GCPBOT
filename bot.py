@@ -267,7 +267,6 @@ class CombatView(discord.ui.View):
             gain_xp = random.randint(15, 30)
             gain_credits = random.randint(20, 50)
 
-            # 1. Progression XP & Niveau progressif (Seuil = Niveau * 100 XP)
             xp_total = self.stats["xp"] + gain_xp
             temp_xp = xp_total
             nouveau_niveau = 1
@@ -280,7 +279,6 @@ class CombatView(discord.ui.View):
 
             a_gagne_niveau = nouveau_niveau > self.stats["niveau"]
 
-            # 2. Progression du secteur / théâtre
             nouveau_secteur = self.stats["secteur"] + 1
             nouveau_theatre = self.stats["theatre"]
             msg_progression = f"Secteur {self.stats['secteur']} sécurisé !"
@@ -295,7 +293,6 @@ class CombatView(discord.ui.View):
                 else:
                     msg_progression = "🏆 **VICTOIRE TOTALE !** Tu as nettoyé tous les théâtres d'opérations !"
 
-            # 3. Gestion de l'énergie (3 mécaniques combinées)
             energie_actuelle = max(0, self.stats["energie"] - 1)
             msgs_energie = []
             bonus_energie = 0
@@ -304,19 +301,16 @@ class CombatView(discord.ui.View):
                 nouvelle_energie = self.stats["max_energie"]
                 msgs_energie.append(f"🎖️ **Niveau supérieur !** Tu passes Niveau {nouveau_niveau} (Énergie restaurée à 100 % !)")
             else:
-                # Bonus d'étape : secteur 5 validé ou passage de théâtre
                 if self.stats["secteur"] == 5 or self.stats["secteur"] == 10:
                     bonus_energie += 1
                     msgs_energie.append("🔋 **Bonus d'étape :** +1 Énergie !")
 
-                # Loot consommable (15 % de chances)
                 if random.random() < 0.15:
                     bonus_energie += 1
                     msgs_energie.append("🧪 **Ravitaillement :** Ration de combat trouvée (+1 Énergie) !")
 
                 nouvelle_energie = min(self.stats["max_energie"], energie_actuelle + bonus_energie)
 
-            # Mise à jour en base de données
             c.execute(
                 """UPDATE campagne_joueurs 
                    SET xp = %s, niveau = %s, credits = credits + %s, secteur = %s, theatre = %s, energie = %s 
@@ -324,7 +318,6 @@ class CombatView(discord.ui.View):
                 (xp_total, nouveau_niveau, gain_credits, nouveau_secteur, nouveau_theatre, nouvelle_energie, str(self.user_id))
             )
             
-            # Roll de loot d'équipement (40 % de chances)
             loot_msg = ""
             if random.random() < 0.40:
                 loot = generer_loot(self.user_id)
@@ -426,6 +419,30 @@ twitch_is_live = False
 
 @bot.event
 async def on_member_join(member: discord.Member):
+    # 1. Envoi du Message Privé (MP) automatique avec Embed et Image
+    try:
+        embed_mp = discord.Embed(
+            title=f"⚜️ Bienvenue au GCP, {member.display_name} !",
+            description=(
+                f"Ravi de te compter parmi nous.\n\n"
+                "Voici les salons essentiels pour bien commencer ton aventure avec l'unité :\n\n"
+                "📌 **Présentation de l'Unité :** <#1540508083669700648>\n"
+                "📝 **Déposer sa Candidature :** <#1521135823926333603>\n"
+                "📷 **Galerie Photos OPEX :** <#1521140427913298021>\n\n"
+                "N'hésite pas si tu as des questions, à très vite en opération !"
+            ),
+            color=0x3498DB
+        )
+        
+        # 🔗 Remplace le lien ci-dessous par l'URL directe de l'image de ton choix (.png, .jpg ou .gif)
+        embed_mp.set_image(url="https://imgur.com/a/3RIBU7m")
+        embed_mp.set_footer(text="GCP — Groupement de Commandos Parachutistes • Qui ose gagne.")
+        
+        await member.send(embed=embed_mp)
+    except discord.Forbidden:
+        print(f"⚠️ Impossible d'envoyer un MP à {member.display_name} (MP fermés).")
+
+    # 2. Attribution du rôle automatique
     if AUTO_ROLE_ID:
         role = member.guild.get_role(AUTO_ROLE_ID)
         if role:
@@ -435,6 +452,7 @@ async def on_member_join(member: discord.Member):
             except discord.Forbidden:
                 print(f"❌ Impossible d'attribuer le rôle à {member.display_name} (permissions insuffisantes).")
 
+    # 3. Message de bienvenue dans le salon général
     if WELCOME_CHANNEL_ID:
         channel = member.guild.get_channel(WELCOME_CHANNEL_ID)
         if channel:
@@ -1066,6 +1084,24 @@ async def inscrire_opex(interaction: discord.Interaction, nom_opex: str):
     finally:
         conn.close()
 
+@tree.command(name="desinscrire_opex", description="Se désinscrire d'une opex à venir")
+@app_commands.describe(nom_opex="Nom de l'OPEX officielle")
+async def desinscrire_opex(interaction: discord.Interaction, nom_opex: str):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT id FROM opex_inscriptions WHERE nom_opex = %s AND discord_id = %s", (nom_opex, str(interaction.user.id)))
+    if not c.fetchone():
+        conn.close()
+        await interaction.response.send_message("❌ Tu n'es pas inscrit à cette OPEX.", ephemeral=True)
+        return
+
+    c.execute("DELETE FROM opex_inscriptions WHERE nom_opex = %s AND discord_id = %s", (nom_opex, str(interaction.user.id)))
+    conn.commit()
+    conn.close()
+
+    await interaction.response.send_message(f"✅ Tu t'es bien désinscrit de l'OPEX **{nom_opex}**.", ephemeral=True)
+    await send_log(bot, f"❌ **{interaction.user.display_name}** s'est désinscrit de l'OPEX **{nom_opex}**")
+
 @tree.command(name="liste_inscrits", description="Voir qui est inscrit pour une opex")
 @app_commands.describe(nom_opex="Nom de l'OPEX officielle")
 async def liste_inscrits(interaction: discord.Interaction, nom_opex: str):
@@ -1322,10 +1358,10 @@ async def aide(interaction: discord.Interaction):
         value=(
             "`/profil [@membre]` — Voir un profil\n"
             "`/guide @membre` — Envoyer le guide d'accueil\n"
-            "`/en_dev1 @membre` — Rappeler le règlement\n"
             "`/absent raison durée [@membre]` — Déclarer une absence\n"
             "`/fin_absence [@membre]` — Reprendre le service\n"
             "`/inscrire_opex nom_opex` — S'inscrire à une OPEX\n"
+            "`/desinscrire_opex nom_opex` — Se désinscrire d'une OPEX\n"
             "`/liste_inscrits nom_opex` — Inscrits à une OPEX\n"
             "`/ticket raison` — Ouvrir un ticket au Staff\n"
             "`/historique [@membre]` — Historique opex\n"
