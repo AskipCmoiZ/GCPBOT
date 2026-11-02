@@ -24,7 +24,10 @@ WHITELIST_ROLES = [
 ]
 
 # ID du rôle automatique attribué aux nouveaux arrivants (0 pour désactiver)
-AUTO_ROLE_ID = int(os.getenv("AUTO_ROLE_ID", "1528963080900317315, 1539761133693575179"))
+AUTO_ROLE_IDS = [
+    int(os.getenv("AUTO_ROLE_ID", "1528963080900317315")),
+    int(os.getenv("AUTO_ROLE_ID_2", "1539761133693575179"))
+]
 
 # ID du salon de logs (0 pour désactiver)
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "1546764469143863377"))
