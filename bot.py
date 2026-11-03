@@ -23,10 +23,10 @@ WHITELIST_ROLES = [
     1521132894104322188, 1521132972731007036
 ]
 
-# ID du rôle automatique attribué aux nouveaux arrivants (0 pour désactiver)
+# IDs des rôles automatiques attribués aux nouveaux arrivants
 AUTO_ROLE_IDS = [
     int(os.getenv("AUTO_ROLE_ID", "1528963080900317315")),
-    int(os.getenv("AUTO_ROLE_ID_2", "1539761133693575179"))
+    int(os.getenv("AUTO_ROLE_ID_2", "0"))  # Remplace 0 par l'ID de ton deuxième rôle si besoin
 ]
 
 # ID du salon de logs (0 pour désactiver)
@@ -270,7 +270,6 @@ class CombatView(discord.ui.View):
             gain_xp = random.randint(15, 30)
             gain_credits = random.randint(20, 50)
 
-            # 1. Progression XP & Niveau progressif (Seuil = Niveau * 100 XP)
             xp_total = self.stats["xp"] + gain_xp
             temp_xp = xp_total
             nouveau_niveau = 1
@@ -283,7 +282,6 @@ class CombatView(discord.ui.View):
 
             a_gagne_niveau = nouveau_niveau > self.stats["niveau"]
 
-            # 2. Progression du secteur / théâtre
             nouveau_secteur = self.stats["secteur"] + 1
             nouveau_theatre = self.stats["theatre"]
             msg_progression = f"Secteur {self.stats['secteur']} sécurisé !"
@@ -298,7 +296,6 @@ class CombatView(discord.ui.View):
                 else:
                     msg_progression = "🏆 **VICTOIRE TOTALE !** Tu as nettoyé tous les théâtres d'opérations !"
 
-            # 3. Gestion de l'énergie (3 mécaniques combinées)
             energie_actuelle = max(0, self.stats["energie"] - 1)
             msgs_energie = []
             bonus_energie = 0
@@ -307,19 +304,16 @@ class CombatView(discord.ui.View):
                 nouvelle_energie = self.stats["max_energie"]
                 msgs_energie.append(f"🎖️ **Niveau supérieur !** Tu passes Niveau {nouveau_niveau} (Énergie restaurée à 100 % !)")
             else:
-                # Bonus d'étape : secteur 5 validé ou passage de théâtre
                 if self.stats["secteur"] == 5 or self.stats["secteur"] == 10:
                     bonus_energie += 1
                     msgs_energie.append("🔋 **Bonus d'étape :** +1 Énergie !")
 
-                # Loot consommable (15 % de chances)
                 if random.random() < 0.15:
                     bonus_energie += 1
                     msgs_energie.append("🧪 **Ravitaillement :** Ration de combat trouvée (+1 Énergie) !")
 
                 nouvelle_energie = min(self.stats["max_energie"], energie_actuelle + bonus_energie)
 
-            # Mise à jour en base de données
             c.execute(
                 """UPDATE campagne_joueurs 
                    SET xp = %s, niveau = %s, credits = credits + %s, secteur = %s, theatre = %s, energie = %s 
@@ -327,7 +321,6 @@ class CombatView(discord.ui.View):
                 (xp_total, nouveau_niveau, gain_credits, nouveau_secteur, nouveau_theatre, nouvelle_energie, str(self.user_id))
             )
             
-            # Roll de loot d'équipement (40 % de chances)
             loot_msg = ""
             if random.random() < 0.40:
                 loot = generer_loot(self.user_id)
@@ -429,15 +422,58 @@ twitch_is_live = False
 
 @bot.event
 async def on_member_join(member: discord.Member):
-    if AUTO_ROLE_ID:
-        role = member.guild.get_role(AUTO_ROLE_ID)
-        if role:
-            try:
-                await member.add_roles(role)
-                await send_log(bot, f"👤 **{member.display_name}** a rejoint le serveur et a reçu le rôle **{role.name}**.")
-            except discord.Forbidden:
-                print(f"❌ Impossible d'attribuer le rôle à {member.display_name} (permissions insuffisantes).")
+    # 1. Envoi du Message Privé (MP) automatique avec Embed et Image attachée
+    try:
+        file = discord.File("banniere.jpg", filename="banniere.jpg")
+        embed_mp = discord.Embed(
+            title=f"Bienvenue au sein de l'unité, {member.name} ! 🪖",
+            description=f"Ravi de t'accueillir {member.mention}. Voici les informations essentielles pour bien démarrer :",
+            color=discord.Color.from_rgb(47, 79, 79)
+        )
+        embed_mp.add_field(
+            name="🎖️ Présentation de l'Unité",
+            value="Découvre nos opérations et notre fonctionnement dans <#1540508083669700648>.",
+            inline=False
+        )
+        embed_mp.add_field(
+            name="📝 Rejoindre nos rangs",
+            value="Pour postuler, dépose ta candidature dans <#1521135823926333603>.",
+            inline=False
+        )
+        embed_mp.add_field(
+            name="📷 Galerie OPEX",
+            value="Jette un œil aux photos de nos récentes missions dans <#1521140427913298021>.",
+            inline=False
+        )
+        embed_mp.set_image(url="attachment://banniere.jpg")
+        if member.guild.icon:
+            embed_mp.set_thumbnail(url=member.guild.icon.url)
+        embed_mp.set_footer(text=f"Serveur {member.guild.name} — Restez paré !")
 
+        await member.send(file=file, embed=embed_mp)
+        print(f"MP envoyé avec succès à {member.name}")
+    except discord.Forbidden:
+        print(f"⚠️ Impossible d'envoyer un MP à {member.display_name} (MP fermés).")
+    except Exception as e:
+        print(f"⚠️ Erreur lors de l'envoi du MP : {e}")
+
+    # 2. Attribution des rôles automatiques
+    roles_attribues = []
+    for role_id in AUTO_ROLE_IDS:
+        if role_id != 0:
+            role = member.guild.get_role(role_id)
+            if role:
+                try:
+                    await member.add_roles(role)
+                    roles_attribues.append(role.name)
+                except discord.Forbidden:
+                    print(f"❌ Impossible d'attribuer le rôle {role.name} à {member.display_name} (permissions insuffisantes).")
+
+    if roles_attribues:
+        str_roles = ", ".join([f"**{r}**" for r in roles_attribues])
+        await send_log(bot, f"👤 **{member.display_name}** a rejoint le serveur et a reçu les rôles : {str_roles}.")
+
+    # 3. Message de bienvenue dans le salon général
     if WELCOME_CHANNEL_ID:
         channel = member.guild.get_channel(WELCOME_CHANNEL_ID)
         if channel:
@@ -1069,6 +1105,24 @@ async def inscrire_opex(interaction: discord.Interaction, nom_opex: str):
     finally:
         conn.close()
 
+@tree.command(name="desinscrire_opex", description="Se désinscrire d'une opex à venir")
+@app_commands.describe(nom_opex="Nom de l'OPEX officielle")
+async def desinscrire_opex(interaction: discord.Interaction, nom_opex: str):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT id FROM opex_inscriptions WHERE nom_opex = %s AND discord_id = %s", (nom_opex, str(interaction.user.id)))
+    if not c.fetchone():
+        conn.close()
+        await interaction.response.send_message("❌ Tu n'es pas inscrit à cette OPEX.", ephemeral=True)
+        return
+
+    c.execute("DELETE FROM opex_inscriptions WHERE nom_opex = %s AND discord_id = %s", (nom_opex, str(interaction.user.id)))
+    conn.commit()
+    conn.close()
+
+    await interaction.response.send_message(f"✅ Tu t'es bien désinscrit de l'OPEX **{nom_opex}**.", ephemeral=True)
+    await send_log(bot, f"❌ **{interaction.user.display_name}** s'est désinscrit de l'OPEX **{nom_opex}**")
+
 @tree.command(name="liste_inscrits", description="Voir qui est inscrit pour une opex")
 @app_commands.describe(nom_opex="Nom de l'OPEX officielle")
 async def liste_inscrits(interaction: discord.Interaction, nom_opex: str):
@@ -1325,10 +1379,10 @@ async def aide(interaction: discord.Interaction):
         value=(
             "`/profil [@membre]` — Voir un profil\n"
             "`/guide @membre` — Envoyer le guide d'accueil\n"
-            "`/en_dev1 @membre` — Rappeler le règlement\n"
             "`/absent raison durée [@membre]` — Déclarer une absence\n"
             "`/fin_absence [@membre]` — Reprendre le service\n"
             "`/inscrire_opex nom_opex` — S'inscrire à une OPEX\n"
+            "`/desinscrire_opex nom_opex` — Se désinscrire d'une OPEX\n"
             "`/liste_inscrits nom_opex` — Inscrits à une OPEX\n"
             "`/ticket raison` — Ouvrir un ticket au Staff\n"
             "`/historique [@membre]` — Historique opex\n"
