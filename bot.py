@@ -422,17 +422,42 @@ twitch_is_live = False
 
 @bot.event
 async def on_member_join(member: discord.Member):
-    # 1. Envoi du Message Privé (MP) automatique avec Embed et Image attachée
+    # ==========================================
+    # SÉCURITÉ : VÉRIFICATION DE L'ÂGE DU COMPTE
+    # ==========================================
+    AGE_MINIMUM_JOURS = 30  # Modifie ce nombre selon tes besoins (ex: 3, 7, 30 jours)
+    
+    delta_age = datetime.now(PARIS_TZ) - member.created_at.astimezone(PARIS_TZ)
+    
+    if delta_age.days < AGE_MINIMUM_JOURS:
+        try:
+            await member.send(
+                f"❌ Ton compte Discord est trop récent pour rejoindre **{member.guild.name}**.\n"
+                f"L'âge minimum requis est de **{AGE_MINIMUM_JOURS} jours**."
+            )
+        except Exception:
+            pass
+        
+        try:
+            await member.kick(reason=f"Sécurité : Compte trop récent ({delta_age.days} jours).")
+            await send_log(bot, f"🛡️ **{member.display_name}** a été expulsé (compte créé il y a {delta_age.days} jours).")
+        except discord.Forbidden:
+            print(f"❌ Erreur : Le bot n'a pas la permission d'expulser des membres.")
+        return  # Stoppe la suite (pas de rôle, pas de message de bienvenue)
+
+    # ==========================================
+    # 1. ENVOI DU MP DE BIENVENUE
+    # ==========================================
     try:
         file = discord.File("banniere.jpg", filename="banniere.jpg")
         embed_mp = discord.Embed(
             title=f"Bienvenue au sein de l'unité, {member.name} ! 🪖",
-            description=f"Ravi de t'accueillir {member.mention}. Voici les informations essentielles pour bien démarrer :",
+            description=f"Ravi de t'accueillir {member.mention}. Voici les informations essentielles :",
             color=discord.Color.from_rgb(47, 79, 79)
         )
         embed_mp.add_field(
             name="🎖️ Présentation de l'Unité",
-            value="Découvre nos opérations et notre fonctionnement dans <#1540508083669700648>.",
+            value="Découvre nos opérations dans <#1540508083669700648>.",
             inline=False
         )
         embed_mp.add_field(
@@ -442,7 +467,7 @@ async def on_member_join(member: discord.Member):
         )
         embed_mp.add_field(
             name="📷 Galerie OPEX",
-            value="Jette un œil aux photos de nos récentes missions dans <#1521140427913298021>.",
+            value="Jette un œil aux photos dans <#1521140427913298021>.",
             inline=False
         )
         embed_mp.set_image(url="attachment://banniere.jpg")
@@ -451,13 +476,12 @@ async def on_member_join(member: discord.Member):
         embed_mp.set_footer(text=f"Serveur {member.guild.name} — Restez paré !")
 
         await member.send(file=file, embed=embed_mp)
-        print(f"MP envoyé avec succès à {member.name}")
-    except discord.Forbidden:
-        print(f"⚠️ Impossible d'envoyer un MP à {member.display_name} (MP fermés).")
     except Exception as e:
-        print(f"⚠️ Erreur lors de l'envoi du MP : {e}")
+        print(f"⚠️ Erreur MP : {e}")
 
-    # 2. Attribution des rôles automatiques
+    # ==========================================
+    # 2. ATTRIBUTION DES RÔLES AUTOMATIQUES
+    # ==========================================
     roles_attribues = []
     for role_id in AUTO_ROLE_IDS:
         if role_id != 0:
@@ -467,19 +491,19 @@ async def on_member_join(member: discord.Member):
                     await member.add_roles(role)
                     roles_attribues.append(role.name)
                 except discord.Forbidden:
-                    print(f"❌ Impossible d'attribuer le rôle {role.name} à {member.display_name} (permissions insuffisantes).")
+                    print(f"❌ Impossible d'attribuer le rôle {role.name}.")
 
     if roles_attribues:
         str_roles = ", ".join([f"**{r}**" for r in roles_attribues])
-        await send_log(bot, f"👤 **{member.display_name}** a rejoint le serveur et a reçu les rôles : {str_roles}.")
+        await send_log(bot, f"👤 **{member.display_name}** a rejoint et a reçu les rôles : {str_roles}.")
 
-    # 3. Message de bienvenue dans le salon général
+    # ==========================================
+    # 3. MESSAGE DE BIENVENUE PUBLIC
+    # ==========================================
     if WELCOME_CHANNEL_ID:
         channel = member.guild.get_channel(WELCOME_CHANNEL_ID)
         if channel:
             date_creation = member.created_at.astimezone(PARIS_TZ).strftime("%d/%m/%Y à %H:%M")
-            date_arrivee = member.joined_at.astimezone(PARIS_TZ).strftime("%d/%m/%Y à %H:%M") if member.joined_at else "Inconnue"
-            
             embed = discord.Embed(
                 title="🟢 Nouveau membre !",
                 description=f"Bienvenue {member.mention} sur le serveur **{member.guild.name}** !",
@@ -488,11 +512,10 @@ async def on_member_join(member: discord.Member):
             )
             embed.set_thumbnail(url=member.display_avatar.url)
             embed.add_field(name="👤 Pseudo", value=f"{member.name} ({member.display_name})", inline=True)
-            embed.add_field(name="🆔 ID Discord", value=f"`{member.id}`", inline=True)
-            embed.add_field(name="👥 Total membres", value=f"**{member.guild.member_count}**", inline=True)
+            embed.add_field(name="🆔 ID", value=f"`{member.id}`", inline=True)
+            embed.add_field(name="👥 Total", value=f"**{member.guild.member_count}**", inline=True)
             embed.add_field(name="📅 Compte créé le", value=date_creation, inline=False)
-            embed.add_field(name="🛬 Rejoint le", value=date_arrivee, inline=False)
-            embed.set_footer(text="GCP Bot • Système de bienvenue")
+            embed.set_footer(text="GCP Bot • Sécurité anti-raid")
 
             await channel.send(embed=embed)
 
