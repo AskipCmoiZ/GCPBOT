@@ -26,7 +26,7 @@ WHITELIST_ROLES = [
 # IDs des rôles automatiques attribués aux nouveaux arrivants
 AUTO_ROLE_IDS = [
     int(os.getenv("AUTO_ROLE_ID", "1528963080900317315")),
-    int(os.getenv("AUTO_ROLE_ID_2", "0"))  # Remplace 0 par l'ID de ton deuxième rôle si besoin
+    int(os.getenv("AUTO_ROLE_ID_2", "1539761133693575179"))  # Remplace 0 par l'ID de ton deuxième rôle si besoin
 ]
 
 # ID du salon de logs (0 pour désactiver)
